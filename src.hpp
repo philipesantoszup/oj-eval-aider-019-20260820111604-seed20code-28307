@@ -48,6 +48,8 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
     Matrix* K_T = matrix_memory_allocator.Allocate("K_T_" + std::to_string(i));
     gpu_sim.Copy(K, K_T, kInGpuHbm);
     gpu_sim.Transpose(K_T, kInGpuHbm);
+    // K is no longer needed after this point, release it
+    gpu_sim.ReleaseMatrix(K);
 
     // Step 4: Move Q, K_T, V to SRAM for computation
     gpu_sim.MoveMatrixToSharedMem(current_query);
@@ -57,6 +59,8 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
     // Step 5: Compute logits = Q @ K^T
     Matrix* logits = matrix_memory_allocator.Allocate("logits_" + std::to_string(i));
     gpu_sim.MatMul(current_query, K_T, logits);
+    // K_T is no longer needed after this point
+    gpu_sim.ReleaseMatrix(K_T);
 
     // Step 6: Compute row-wise Softmax to get attention_weights
     std::vector<Matrix*> softmax_rows;
@@ -66,20 +70,20 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
 
         Matrix* exp_row = matrix_memory_allocator.Allocate("exp_row_" + std::to_string(i) + "_" + std::to_string(j));
         gpu_sim.MatExp(row_j, exp_row);
+        gpu_sim.ReleaseMatrix(row_j);
 
         Matrix* sum_exp = matrix_memory_allocator.Allocate("sum_exp_" + std::to_string(i) + "_" + std::to_string(j));
         gpu_sim.Sum(exp_row, sum_exp);
 
         Matrix* softmax_row = matrix_memory_allocator.Allocate("softmax_row_" + std::to_string(i) + "_" + std::to_string(j));
         gpu_sim.MatDiv(exp_row, sum_exp, softmax_row);
-
-        softmax_rows.push_back(softmax_row);
-
-        // Release intermediate matrices to save memory
-        gpu_sim.ReleaseMatrix(row_j);
         gpu_sim.ReleaseMatrix(exp_row);
         gpu_sim.ReleaseMatrix(sum_exp);
+
+        softmax_rows.push_back(softmax_row);
     }
+    // logits is no longer needed
+    gpu_sim.ReleaseMatrix(logits);
 
     // Step 7: Concatenate softmax rows into attention_weights
     Matrix* attention_weights = matrix_memory_allocator.Allocate("attention_weights_" + std::to_string(i));
@@ -105,6 +109,9 @@ void Calculate(std::vector<Matrix *> keys, std::vector<Matrix *> values,
     // Step 8: Compute output = attention_weights @ V
     Matrix* output = matrix_memory_allocator.Allocate("output_" + std::to_string(i));
     gpu_sim.MatMul(attention_weights, V, output);
+    // attention_weights and V are no longer needed
+    gpu_sim.ReleaseMatrix(attention_weights);
+    gpu_sim.ReleaseMatrix(V);
 
     // Step 9: Move output to HBM
     gpu_sim.MoveMatrixToGpuHbm(output);
